@@ -104,7 +104,7 @@ The application follows a clean architecture pattern with clear separation of co
 1. **Clone the repository**:
    ```bash
    git clone <repository-url>
-   cd weather-monitor
+   cd <repo-name>
    ```
 
 2. **Start the application**:
