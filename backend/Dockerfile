@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
 
 WORKDIR /app
 
@@ -8,7 +8,9 @@ ENV POETRY_VERSION=1.8.3 \
     POETRY_VIRTUALENVS_CREATE=false \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
-RUN pip install --no-cache-dir poetry==${POETRY_VERSION}
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && \
+    pip install --no-cache-dir poetry==${POETRY_VERSION} && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml poetry.lock* ./
 
@@ -18,6 +20,9 @@ COPY . .
 
 RUN poetry install --only-root
 
+RUN useradd --create-home appuser && chown -R appuser /app
+USER appuser
+
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

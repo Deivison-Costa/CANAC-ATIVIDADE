@@ -1,14 +1,17 @@
 import httpx
+from typing import Any
 from app.core.config import settings
 from app.schemas.weather import WeatherResponse, LocationData
 from app.services.cache_service import CacheService
+from app.services.exceptions import GeocodingError, ExternalAPIError
 
 
 class WeatherService:
-    """Service layer for weather data operations"""
+    """Service layer for weather data operations."""
 
-    def __init__(self):
+    def __init__(self, client: httpx.AsyncClient | None = None):
         self.cache = CacheService()
+        self.client = client or httpx.AsyncClient(timeout=10.0)
 
     async def get_weather_by_city(self, city: str) -> WeatherResponse:
         """
@@ -22,7 +25,7 @@ class WeatherService:
         """
         cache_key = f"weather:{city.lower()}"
 
-        cached_data = self.cache.get(cache_key)
+        cached_data = await self.cache.get(cache_key)
         if cached_data:
             return WeatherResponse(**cached_data)
 
@@ -30,76 +33,79 @@ class WeatherService:
 
         weather_data = await self._fetch_weather(location.latitude, location.longitude)
 
+        try:
+            current = weather_data["current"]
+        except Exception as e:
+            raise ExternalAPIError("Unexpected weather payload from upstream") from e
+
         response = WeatherResponse(
             city=location.name,
             country=location.country,
             latitude=location.latitude,
             longitude=location.longitude,
-            temperature=weather_data["current"]["temperature_2m"],
-            apparent_temperature=weather_data["current"]["apparent_temperature"],
-            humidity=weather_data["current"]["relative_humidity_2m"],
-            precipitation=weather_data["current"]["precipitation"],
-            rain=weather_data["current"]["rain"],
-            wind_speed=weather_data["current"]["wind_speed_10m"],
-            wind_direction=weather_data["current"]["wind_direction_10m"],
-            cloud_cover=weather_data["current"]["cloud_cover"],
-            pressure=weather_data["current"]["surface_pressure"],
-            weather_code=weather_data["current"]["weather_code"],
-            timestamp=weather_data["current"]["time"],
+            temperature=current["temperature_2m"],
+            apparent_temperature=current["apparent_temperature"],
+            humidity=current["relative_humidity_2m"],
+            precipitation=current["precipitation"],
+            rain=current.get("rain", 0.0),
+            wind_speed=current["wind_speed_10m"],
+            wind_direction=current["wind_direction_10m"],
+            cloud_cover=current["cloud_cover"],
+            pressure=current["surface_pressure"],
+            weather_code=current["weather_code"],
+            timestamp=current["time"],
         )
 
-        self.cache.set(cache_key, response.model_dump(), ttl=settings.CACHE_TTL_SECONDS)
+        await self.cache.set(cache_key, response.model_dump(), ttl=settings.CACHE_TTL_SECONDS)
 
         return response
 
     async def _geocode_city(self, city: str) -> LocationData:
         """Convert city name to coordinates using Open-Meteo Geocoding API"""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{settings.GEOCODING_BASE_URL}/search",
-                params={"name": city, "count": 1, "language": "en", "format": "json"},
-            )
+        resp = await self.client.get(
+            f"{settings.GEOCODING_BASE_URL}/search",
+            params={"name": city, "count": 1, "language": "en", "format": "json"},
+        )
 
-            if response.status_code != 200:
-                raise ValueError(f"Failed to geocode city: {city}")
+        if resp.status_code != 200:
+            raise GeocodingError(f"Failed to geocode city: {city}")
 
-            data = response.json()
+        data = resp.json()
 
-            if not data.get("results"):
-                raise ValueError(f"City not found: {city}")
+        if not data.get("results"):
+            raise GeocodingError(f"City not found: {city}")
 
-            result = data["results"][0]
-            return LocationData(
-                name=result["name"],
-                country=result.get("country", "Unknown"),
-                latitude=result["latitude"],
-                longitude=result["longitude"],
-            )
+        result = data["results"][0]
+        return LocationData(
+            name=result.get("name", city),
+            country=result.get("country", "Unknown"),
+            latitude=float(result["latitude"]),
+            longitude=float(result["longitude"]),
+        )
 
-    async def _fetch_weather(self, latitude: float, longitude: float) -> dict:
+    async def _fetch_weather(self, latitude: float, longitude: float) -> dict[str, Any]:
         """Fetch weather data from Open-Meteo API"""
-        async with httpx.AsyncClient() as client:
-            params = {
-                "latitude": latitude,
-                "longitude": longitude,
-                "current": [
-                    "temperature_2m",
-                    "apparent_temperature",
-                    "relative_humidity_2m",
-                    "precipitation",
-                    "rain",
-                    "cloud_cover",
-                    "surface_pressure",
-                    "wind_speed_10m",
-                    "wind_direction_10m",
-                    "weather_code",
-                ],
-                "timezone": "auto",
-            }
+        params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "current": [
+                "temperature_2m",
+                "apparent_temperature",
+                "relative_humidity_2m",
+                "precipitation",
+                "rain",
+                "cloud_cover",
+                "surface_pressure",
+                "wind_speed_10m",
+                "wind_direction_10m",
+                "weather_code",
+            ],
+            "timezone": "auto",
+        }
 
-            response = await client.get(f"{settings.OPEN_METEO_BASE_URL}/forecast", params=params)
+        resp = await self.client.get(f"{settings.OPEN_METEO_BASE_URL}/forecast", params=params)
 
-            if response.status_code != 200:
-                raise Exception("Failed to fetch weather data from Open-Meteo API")
+        if resp.status_code != 200:
+            raise ExternalAPIError("Failed to fetch weather data from Open-Meteo API")
 
-            return response.json()
+        return resp.json()
