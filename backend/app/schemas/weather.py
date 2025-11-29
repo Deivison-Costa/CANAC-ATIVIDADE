@@ -33,8 +33,8 @@ class WeatherResponse(BaseModel):
     weather_code: int = Field(..., description="WMO Weather code")
     timestamp: str = Field(..., description="Timestamp of the data")
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "city": "São Paulo",
                 "country": "Brazil",
@@ -53,3 +53,4 @@ class WeatherResponse(BaseModel):
                 "timestamp": "2024-01-15T14:30:00",
             }
         }
+    }
