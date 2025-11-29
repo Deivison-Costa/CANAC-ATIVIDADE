@@ -7,10 +7,10 @@ from app.schemas.weather import LocationData
 async def test_get_weather_by_city_cache_and_flow(monkeypatch):
     svc = WeatherService()
 
-    async def fake_geocode():
+    async def fake_geocode(self, city: str):
         return LocationData(name="TestCity", country="TestLand", latitude=1.0, longitude=2.0)
 
-    async def fake_fetch():
+    async def fake_fetch(self, lat: float, lon: float):
         return {
             "current": {
                 "temperature_2m": 25.0,
@@ -27,10 +27,11 @@ async def test_get_weather_by_city_cache_and_flow(monkeypatch):
             }
         }
 
-    monkeypatch.setattr(svc, "_geocode_city", fake_geocode)
-    monkeypatch.setattr(svc, "_fetch_weather", fake_fetch)
+    monkeypatch.setattr(svc, "_geocode_city", fake_geocode.__get__(svc, WeatherService))
+    monkeypatch.setattr(svc, "_fetch_weather", fake_fetch.__get__(svc, WeatherService))
 
     r = await svc.get_weather_by_city("TestCity")
     assert r.city == "TestCity"
+
     r2 = await svc.get_weather_by_city("TestCity")
     assert r2.city == "TestCity"
